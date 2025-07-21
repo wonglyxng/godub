@@ -2,8 +2,8 @@ package converter
 
 import (
 	"fmt"
-
 	"os/exec"
+	"runtime"
 )
 
 func GetEncoderName() string {
@@ -15,7 +15,13 @@ func GetEncoderName() string {
 }
 
 func IsCommandAvailable(name string) bool {
-	cmd := exec.Command("which", name)
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("where", name)
+	} else {
+		cmd = exec.Command("which", name)
+	}
+
 	if err := cmd.Run(); err != nil {
 		return false
 	}
