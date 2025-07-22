@@ -676,7 +676,6 @@ func Ratecv(cp []byte, size, nChannels, inRate, outRate, weightA, weightB int) (
 		}
 	}
 
-	return nil, nil, nil
 }
 
 func sum2(cp1, cp2 []byte, length int) (int32, error) {

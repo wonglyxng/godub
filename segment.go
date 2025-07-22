@@ -8,8 +8,6 @@ import (
 
 	"encoding/binary"
 
-	"time"
-
 	"github.com/wonglyxng/godub/audioop"
 	"github.com/wonglyxng/godub/utils"
 	"github.com/wonglyxng/godub/wav"
@@ -36,7 +34,7 @@ type AudioSegment struct {
 
 func (seg *AudioSegment) String() string {
 	return fmt.Sprintf(
-		"AudioSegment(sample_width=%d, frame_rate=%d, frame_width=%d, channels=%d, duration=%s)",
+		"AudioSegment(sample_width=%d, frame_rate=%d, frame_width=%d, channels=%d, duration=%dms)",
 		seg.sampleWidth, seg.frameRate, seg.frameWidth, seg.channels, seg.Duration(),
 	)
 }
@@ -121,7 +119,23 @@ func (seg *AudioSegment) AsWaveAudio() *wav.WaveAudio {
 }
 
 // Operations
-func (seg *AudioSegment) Slice(start, end time.Duration) (*AudioSegment, error) {
+
+// Slice 从音频片段中截取指定时间范围的部分
+//
+// 参数:
+//   - start: 起始时间(毫秒)
+//   - end: 结束时间(毫秒)
+//
+// 返回:
+//   - *AudioSegment: 截取的新音频片段
+//   - error: 错误信息,如果有的话
+//
+// 注意事项:
+//   - start必须小于end
+//   - start和end必须为非负数
+//   - 如果end超过音频长度,将截取到音频末尾
+//   - 对于缺失的帧会用静音填充(最多2ms)
+func (seg *AudioSegment) Slice(start, end int64) (*AudioSegment, error) {
 	if start > end {
 		return nil, NewAudioSegmentError("start should be smaller than end")
 	}
@@ -152,7 +166,7 @@ func (seg *AudioSegment) Slice(start, end time.Duration) (*AudioSegment, error) 
 	// Ensure the output is as long as the user is expecting
 	missingFrames := (expectedLength - len(data)) / int(seg.frameWidth)
 	if missingFrames > 0 {
-		if float64(missingFrames) > seg.FrameCountIn(2*time.Millisecond) {
+		if float64(missingFrames) > seg.FrameCountIn(2) {
 			return nil, NewAudioSegmentError(
 				"you should never be filling in more than 2ms with silence here, missing %d frames",
 				missingFrames)
@@ -304,8 +318,8 @@ func (seg *AudioSegment) ForkWithChannels(channels uint16) (*AudioSegment, error
 }
 
 type OverlayConfig struct {
-	// Position to start overlaying
-	Position time.Duration
+	// Position to start overlaying, milliseconds
+	Position int64
 	// LoopToEnd indicates whether it's necessary to match the original segment's length
 	LoopToEnd bool
 	// LoopCount indicates that we should loop the segment for `LoopCount` times
@@ -315,6 +329,20 @@ type OverlayConfig struct {
 }
 
 // Overlay overlays the given audio segment on the current segment.
+// Overlay 在当前音频片段上叠加另一个音频片段
+//
+// 参数:
+//   - other: 要叠加的音频片段
+//   - config: 叠加配置,包含:
+//   - Position: 开始叠加的位置(毫秒)
+//   - LoopToEnd: 是否循环叠加直到原始音频结束
+//   - LoopCount: 循环次数(LoopToEnd为true时忽略)
+//   - GainDuringOverlay: 叠加时的音量增益
+//
+// 注意:
+//   - 如果other为nil,返回原始音频段
+//   - 叠加前会先同步两个音频段的采样参数
+//   - LoopCount默认为1,当LoopToEnd为true时设为-1表示无限循环
 func (seg *AudioSegment) Overlay(other *AudioSegment, config *OverlayConfig) (*AudioSegment, error) {
 	if other == nil {
 		return seg.derive(seg.data)
@@ -419,6 +447,15 @@ func (seg *AudioSegment) Overlay(other *AudioSegment, config *OverlayConfig) (*A
 }
 
 // RMS returns the value of root mean square
+// RMS 返回音频片段的均方根值(Root Mean Square)
+//
+// 计算过程:
+//  1. 如果已经缓存了RMS值,直接返回
+//  2. 对于1字节采样宽度的音频,先转换为2字节后再计算
+//  3. 使用audioop.RMS计算均方根值
+//
+// 注意:
+//   - 如果计算过程中发生错误,将返回0
 func (seg *AudioSegment) RMS() float64 {
 	if seg.rms != nil {
 		return *seg.rms
@@ -439,14 +476,33 @@ func (seg *AudioSegment) RMS() float64 {
 		seg.rms = &rms
 		return rms
 	}
-	return 0
 }
 
 // DBFS returns the value of dB Full Scale
+// DBFS 返回音频片段的dB全幅度值(dB Full Scale)
+//
+// 计算方式:
+//
+//	DBFS = 20 * log10(RMS值 / 最大振幅)
+//
+// 说明:
+//   - DBFS表示相对于最大可能振幅的分贝值
+//   - 值始终为负数或0,0表示最大振幅
+//   - 值越小表示音量越小
 func (seg *AudioSegment) DBFS() Volume {
 	return NewVolumeFromRatio(seg.RMS()/seg.MaxPossibleAmplitude(), 0, true)
 }
 
+// MaxPossibleAmplitude 返回音频片段可能的最大振幅值
+//
+// 计算方式:
+//
+//	最大振幅 = (2^采样位数) / 2
+//
+// 说明:
+//   - 对于16位音频,最大振幅为32768(2^16/2)
+//   - 对于8位音频,最大振幅为128(2^8/2)
+//   - 振幅范围在[-最大振幅,+最大振幅]之间
 func (seg *AudioSegment) MaxPossibleAmplitude() float64 {
 	bits := seg.sampleWidth * 8
 	maxPossibleVal := math.Pow(2, float64(bits))
@@ -454,10 +510,24 @@ func (seg *AudioSegment) MaxPossibleAmplitude() float64 {
 	return maxPossibleVal / 2
 }
 
+// MaxDBFS 返回音频片段最大振幅的dB全幅度值
+//
+// 计算方式:
+//
+//	MaxDBFS = 20 * log10(最大振幅值 / 最大可能振幅)
+//
+// 说明:
+//   - 与DBFS类似,但使用最大振幅而非RMS值计算
+//   - 值始终为负数或0,0表示达到最大可能振幅
 func (seg *AudioSegment) MaxDBFS() Volume {
 	return NewVolumeFromRatio(seg.Max(), seg.MaxPossibleAmplitude(), true)
 }
 
+// Max 返回音频片段中的最大振幅值
+//
+// 说明:
+//   - 使用audioop.Max计算原始数据中的最大值
+//   - 如果计算出错则返回0
 func (seg *AudioSegment) Max() float64 {
 	if r, err := audioop.Max(seg.data, int(seg.sampleWidth)); err != nil {
 		return 0
@@ -466,15 +536,30 @@ func (seg *AudioSegment) Max() float64 {
 	}
 }
 
-func (seg *AudioSegment) Duration() time.Duration {
+// Duration 返回音频片段的时长(毫秒)
+//
+// 计算方式:
+//
+//	duration = (帧数 / 帧率) * 1000
+//
+// 注意:
+//   - 如果帧率为0,将返回0
+func (seg *AudioSegment) Duration() int64 {
 	if seg.frameRate == 0 {
 		return 0
 	}
-
 	mills := math.Round(1000.0 * (seg.FrameCount() / float64(seg.frameRate)))
-	return time.Duration(int(mills) * int(time.Millisecond))
+	return int64(mills)
 }
 
+// FrameCount 返回音频片段的总帧数
+//
+// 计算方式:
+//
+//	帧数 = 数据长度 / 每帧字节数
+//
+// 注意:
+//   - 如果frameWidth为0,将返回0
 func (seg *AudioSegment) FrameCount() float64 {
 	if seg.frameWidth > 0 {
 		return float64(len(seg.data) / int(seg.frameWidth))
@@ -483,13 +568,24 @@ func (seg *AudioSegment) FrameCount() float64 {
 	}
 }
 
-func (seg *AudioSegment) FrameCountIn(d time.Duration) float64 {
+// FrameCountIn 计算指定毫秒数对应的帧数
+//
+// 参数:
+//   - ms: 毫秒数
+//
+// 返回:
+//   - float64: 对应的帧数
+//
+// 注意:
+//   - 如果传入的毫秒数大于音频总时长,将使用音频总时长计算
+//   - 计算方式: 帧数 = 毫秒数 * (帧率 / 1000)
+func (seg *AudioSegment) FrameCountIn(ms int64) float64 {
 	duration := seg.Duration()
-	if d > duration {
-		d = duration
+	if ms > duration {
+		ms = duration
 	}
 
-	ms := utils.Milliseconds(d)
+	//ms := utils.Milliseconds(d)
 	return float64(ms) * (float64(seg.frameRate) / 1000.0)
 }
 
@@ -515,6 +611,26 @@ func (seg *AudioSegment) RawData() []byte {
 
 // Private functions & methods
 // sync will make sure every input segments have identical channels, frame rate and sample width.
+// sync 确保所有输入的音频片段具有相同的声道数、采样率和采样宽度
+//
+// 参数:
+//   - segments: 需要同步的音频片段列表
+//
+// 返回:
+//   - []*AudioSegment: 同步后的音频片段列表
+//   - error: 同步过程中的错误信息
+//
+// 同步过程:
+//  1. 收集所有片段的声道数、采样率和采样宽度
+//  2. 选择最大值作为目标参数
+//  3. 依次对每个片段进行转换:
+//     - 调整声道数(mono/stereo)
+//     - 调整采样率(up/down sampling)
+//     - 调整采样宽度(8/16/24/32 bit)
+//
+// 注意:
+//   - 同步会创建新的音频片段,不会修改原始片段
+//   - 转换过程可能会降低音频质量
 func sync(segments ...*AudioSegment) ([]*AudioSegment, error) {
 	allChannels := make([]uint16, 0)
 	allFrameRates := make([]uint32, 0)
@@ -558,6 +674,16 @@ func sync(segments ...*AudioSegment) ([]*AudioSegment, error) {
 }
 
 // derive creates a new audio segment with config from the current one.
+// derive 基于当前音频段创建新的音频段
+//
+// 参数:
+//   - data: 新的音频数据
+//   - opts: 可选的音频段参数
+//
+// 说明:
+//   - 继承当前音频段的所有参数(采样宽度、帧率等)
+//   - 可通过opts覆盖继承的参数
+//   - 实现了音频段的不可变特性
 func (seg *AudioSegment) derive(data []byte, opts ...AudioSegmentOption) (*AudioSegment, error) {
 	ret, err := NewAudioSegment(
 		data,
@@ -577,7 +703,7 @@ func (seg *AudioSegment) derive(data []byte, opts ...AudioSegmentOption) (*Audio
 	return ret, nil
 }
 
-func (seg *AudioSegment) parsePosition(val time.Duration) int {
+func (seg *AudioSegment) parsePosition(val int64) int {
 	frames := seg.FrameCountIn(val)
 	return int(frames)
 }

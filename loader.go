@@ -1,13 +1,10 @@
 package godub
 
 import (
-	"fmt"
-
 	"bytes"
-
+	"fmt"
 	"io"
-
-	"io/ioutil"
+	"os"
 
 	"github.com/wonglyxng/godub/converter"
 	"github.com/wonglyxng/godub/wav"
@@ -36,13 +33,13 @@ func (l *Loader) Load(src interface{}) (*AudioSegment, error) {
 
 	switch r := src.(type) {
 	case io.Reader:
-		result, err := ioutil.ReadAll(r)
+		result, err := io.ReadAll(r)
 		if err != nil {
 			return nil, err
 		}
 		buf = result
 	case string:
-		result, err := ioutil.ReadFile(r)
+		result, err := os.ReadFile(r)
 		if err != nil {
 			return nil, err
 		}

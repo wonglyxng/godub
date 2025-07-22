@@ -3,7 +3,6 @@ module github.com/wonglyxng/godub
 go 1.23.4
 
 require (
-	github.com/iFaceless/godub v0.0.0-20200728093528-a30bb4d1a0f1
 	github.com/stretchr/testify v1.10.0
 	github.com/tink-ab/tempfile v0.0.0-20180226111222-33beb0518f1a
 )

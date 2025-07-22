@@ -3,16 +3,14 @@ package converter
 import (
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"os/exec"
+	"path"
 	"runtime"
 	"strings"
 
-	"path"
-
-	"github.com/iFaceless/godub/utils"
 	"github.com/tink-ab/tempfile"
+	"github.com/wonglyxng/godub/utils"
 )
 
 var (
@@ -172,7 +170,7 @@ func (c *Converter) DstFormat() string {
 func (c *Converter) Convert(src interface{}) error {
 	switch src := src.(type) {
 	case io.Reader:
-		file, err := ioutil.TempFile("", "src-file")
+		file, err := os.CreateTemp("", "src-file")
 		if err != nil {
 			return err
 		}
@@ -225,7 +223,7 @@ func (c *Converter) doConvert() error {
 	}
 
 	// Copy to dst writer
-	buf, err := ioutil.ReadFile(dstFile.Name())
+	buf, err := os.ReadFile(dstFile.Name())
 	c.w.Write(buf)
 
 	return err
