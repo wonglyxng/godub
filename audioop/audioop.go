@@ -88,17 +88,31 @@ func RMS(cp []byte, size int) (int32, error) {
 		return 0, nil
 	}
 
-	samples, err := getSamples(cp, size)
-	if err != nil {
-		return 0, nil
+	// 直接在原始字节数据上计算,避免分配新内存
+	var sumSquares int64
+	for i := 0; i < sampleCount; i++ {
+		start := i * size
+		var sample int32
+
+		switch size {
+		case 1:
+			sample = int32(int8(cp[start]))
+		case 2:
+			sample = int32(int16(cp[start]) | int16(cp[start+1])<<8)
+		case 4:
+			sample = int32(cp[start]) |
+				int32(cp[start+1])<<8 |
+				int32(cp[start+2])<<16 |
+				int32(cp[start+3])<<24
+		default:
+			return 0, NewError("failed to get sample, incorrect size: %d", size)
+		}
+
+		sumSquares += int64(sample) * int64(sample)
 	}
 
-	var sumSquares int
-	for _, sample := range samples {
-		sumSquares += int(sample * sample)
-	}
-
-	return int32(math.Sqrt(float64(sumSquares / sampleCount))), nil
+	// 使用int64避免溢出
+	return int32(math.Sqrt(float64(sumSquares) / float64(sampleCount))), nil
 }
 
 func FindFit(cp1 []byte, cp2 []byte) (int32, int32, error) {

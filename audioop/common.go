@@ -7,18 +7,29 @@ import (
 )
 
 func getSamples(cp []byte, size int) ([]int32, error) {
-	read, err := getReadBinaryFunc(size)
-	if err != nil {
-		return nil, err
-	}
-
 	count := sampleCount(cp, size)
 	samples := make([]int32, 0, count)
 
 	for i := 0; i < count; i++ {
 		start := i * size
-		end := start + size
-		samples = append(samples, read(cp[start:end]))
+		//end := start + size
+		var sample int32
+
+		switch size {
+		case 1:
+			sample = int32(int8(cp[start]))
+		case 2:
+			sample = int32(int16(cp[start]) | int16(cp[start+1])<<8)
+		case 4:
+			sample = int32(cp[start]) |
+				int32(cp[start+1])<<8 |
+				int32(cp[start+2])<<16 |
+				int32(cp[start+3])<<24
+		default:
+			return nil, NewError("failed to get sample, incorrect size: %d", size)
+		}
+
+		samples = append(samples, sample)
 	}
 
 	return samples, nil
@@ -45,15 +56,23 @@ func getReadBinaryFunc(size int) (func(b []byte) int32, error) {
 
 func getSample(cp []byte, size int, offset int) (int32, error) {
 	start := offset * size
-	end := start + size
+	if start+size > len(cp) {
+		return 0, NewError("offset out of range")
+	}
 
 	switch size {
 	case 1:
-		return int32(Int8LE(cp[start:end])), nil
+		// 有符号8位
+		return int32(int8(cp[start])), nil
 	case 2:
-		return int32(Int16LE(cp[start:end])), nil
+		// 有符号16位 小端序
+		return int32(int16(cp[start]) | int16(cp[start+1])<<8), nil
 	case 4:
-		return Int32LE(cp[start:end]), nil
+		// 有符号32位 小端序
+		return int32(cp[start]) |
+			int32(cp[start+1])<<8 |
+			int32(cp[start+2])<<16 |
+			int32(cp[start+3])<<24, nil
 	default:
 		return 0, NewError("failed to get sample, incorrect size: %d", size)
 	}

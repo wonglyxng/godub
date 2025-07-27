@@ -181,6 +181,41 @@ func (seg *AudioSegment) Slice(start, end int64) (*AudioSegment, error) {
 	return seg.derive(data)
 }
 
+func (seg *AudioSegment) SliceIndex(startIndex, endIndex int) (*AudioSegment, error) {
+	if startIndex > endIndex {
+		return nil, NewAudioSegmentError("start should be smaller than end")
+	}
+
+	if startIndex < 0 || endIndex < 0 {
+		return nil, NewAudioSegmentError("start or end should be positive")
+	}
+
+	expectedLength := endIndex - startIndex
+
+	if endIndex > len(seg.data) {
+		endIndex = len(seg.data)
+	}
+
+	data := seg.data[startIndex:endIndex]
+
+	// Ensure the output is as long as the user is expecting
+	missingFrames := (expectedLength - len(data)) / int(seg.frameWidth)
+	if missingFrames > 0 {
+		if float64(missingFrames) > seg.FrameCountIn(2) {
+			return nil, NewAudioSegmentError(
+				"you should never be filling in more than 2ms with silence here, missing %d frames",
+				missingFrames)
+		}
+
+		if silence, err := audioop.Mul(data[:seg.frameWidth], int(seg.sampleWidth), 0); err != nil {
+			silences := bytes.Repeat(silence, missingFrames)
+			data = utils.ConcatenateByteSlice(data, silences)
+		}
+	}
+
+	return seg.derive(data)
+}
+
 func (seg *AudioSegment) Add(other *AudioSegment) (*AudioSegment, error) {
 	return seg.Append(other)
 }
@@ -607,6 +642,10 @@ func (seg *AudioSegment) Channels() uint16 {
 
 func (seg *AudioSegment) RawData() []byte {
 	return seg.data
+}
+
+func (seg *AudioSegment) Len() int {
+	return len(seg.data)
 }
 
 // Private functions & methods
