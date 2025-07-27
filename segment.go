@@ -224,7 +224,7 @@ func (seg *AudioSegment) Append(segments ...*AudioSegment) (*AudioSegment, error
 	combined := []*AudioSegment{seg}
 	combined = append(combined, segments...)
 
-	results, err := sync(combined...)
+	results, err := syncSegments(combined...)
 	if err != nil {
 		return nil, err
 	}
@@ -392,7 +392,7 @@ func (seg *AudioSegment) Overlay(other *AudioSegment, config *OverlayConfig) (*A
 		config.LoopCount = -1
 	}
 
-	syncedSegments, err := sync(seg, other)
+	syncedSegments, err := syncSegments(seg, other)
 	if err != nil {
 		return nil, err
 	}
@@ -670,7 +670,7 @@ func (seg *AudioSegment) Len() int {
 // 注意:
 //   - 同步会创建新的音频片段,不会修改原始片段
 //   - 转换过程可能会降低音频质量
-func sync(segments ...*AudioSegment) ([]*AudioSegment, error) {
+func syncSegments(segments ...*AudioSegment) ([]*AudioSegment, error) {
 	allChannels := make([]uint16, 0)
 	allFrameRates := make([]uint32, 0)
 	allSampleWidths := make([]uint16, 0)

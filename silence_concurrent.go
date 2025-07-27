@@ -3,57 +3,25 @@ package godub
 import (
 	"fmt"
 	"os"
-	"time"
+	"runtime"
+	"sync"
 
-	"github.com/google/go-cmp/cmp"
+	"github.com/wonglyxng/godub/audioop"
 )
 
-// InvalidFile error type
-type InvalidFile struct {
-	OriginalError string
-}
-
-func (invalidFile *InvalidFile) Error() string {
-	return fmt.Sprintf("InvalidFile Error: %v", invalidFile.OriginalError)
-}
-
-// Check if audio is empty
-func checkEmptyAudio(seg *AudioSegment) error {
-
-	rms := seg.RMS()
-	if rms == 0 {
-		return &InvalidFile{"Empty file. Check audio"}
-	}
-	return nil
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func matchTargetAmp(sound *AudioSegment, targetDBFS Volume) *AudioSegment {
-	changeInDBFS := targetDBFS - sound.DBFS()
-	ret, _ := sound.ApplyGain(changeInDBFS)
-	return ret
-}
-
-func DetectSilence(seg *AudioSegment, minSilenceLen int64, silenceThresh Volume, seekStep int) [][]int64 {
+// DetectSilenceConcurrent 是DetectSilence的并发优化版本
+// 通过并行计算RMS值来提高大音频文件的静音检测性能
+//
+// 性能优化要点:
+// 1. 使用多个goroutine并行处理音频片段
+// 2. 直接在原始数据上计算RMS，避免创建AudioSegment对象
+// 3. 减少内存分配和数据复制
+func DetectSilenceConcurrent(seg *AudioSegment, minSilenceLen int64, silenceThresh Volume, seekStep int) [][]int64 {
 	segLen := seg.Duration()
 
 	// you can't have a silent portion of a sound that is longer than the sound
 	if segLen < minSilenceLen {
 		var emp [][]int64
-
 		return emp
 	}
 
@@ -78,13 +46,71 @@ func DetectSilence(seg *AudioSegment, minSilenceLen int64, silenceThresh Volume,
 		sliceStarts = append(sliceStarts, lastSliceStart)
 	}
 
-	for _, i := range sliceStarts {
-		audioSlice, _ := seg.Slice(i, i+minSilenceLen)
-		if audioSlice.RMS() <= silThresh {
-			silenceStarts = append(silenceStarts, i)
+	// 并发处理音频片段
+	numWorkers := runtime.NumCPU()
+	if numWorkers > len(sliceStarts) {
+		numWorkers = len(sliceStarts)
+	}
 
+	// 结果通道，存储静音片段的起始位置
+	type silenceResult struct {
+		index    int
+		position int64
+		isSilent bool
+	}
+
+	resultCh := make(chan silenceResult, len(sliceStarts))
+	var wg sync.WaitGroup
+
+	// 工作函数
+	worker := func(positions []int64, startIdx int) {
+		defer wg.Done()
+
+		for i, pos := range positions {
+			// 直接计算RMS，避免创建新的AudioSegment
+			rms := calculateRMSForSegmentOptimized(seg, pos, pos+minSilenceLen)
+
+			resultCh <- silenceResult{
+				index:    startIdx + i,
+				position: pos,
+				isSilent: rms <= silThresh,
+			}
 		}
 	}
+
+	// 分配工作
+	chunkSize := (len(sliceStarts) + numWorkers - 1) / numWorkers
+	for i := 0; i < numWorkers; i++ {
+		start := i * chunkSize
+		end := start + chunkSize
+		if end > len(sliceStarts) {
+			end = len(sliceStarts)
+		}
+		if start < end {
+			wg.Add(1)
+			go worker(sliceStarts[start:end], start)
+		}
+	}
+
+	// 等待所有工作完成
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
+
+	// 收集结果
+	results := make([]silenceResult, len(sliceStarts))
+	for result := range resultCh {
+		results[result.index] = result
+	}
+
+	// 按顺序提取静音位置
+	for _, result := range results {
+		if result.isSilent {
+			silenceStarts = append(silenceStarts, result.position)
+		}
+	}
+
 	// short circuit when there is no silence
 	if len(silenceStarts) == 0 {
 		var silentRanges [][]int64
@@ -121,16 +147,40 @@ func DetectSilence(seg *AudioSegment, minSilenceLen int64, silenceThresh Volume,
 			currentRangeStart = silenceStartI
 		}
 		prevI = silenceStartI
-
 	}
 	silentRanges = append(silentRanges, []int64{currentRangeStart, prevI + minSilenceLen})
 
 	return silentRanges
 }
 
-func DetectNonsilent(seg *AudioSegment, minSilenceLen int64, silenceThresh Volume, seekStep int) [][]int64 {
+// calculateRMSForSegmentOptimized 直接计算音频片段的RMS，避免创建新的AudioSegment
+// 这是性能优化的核心：直接在原始数据上操作，避免内存分配
+func calculateRMSForSegmentOptimized(seg *AudioSegment, start, end int64) float64 {
+	// 将时间转换为字节索引
+	startIndex := seg.parsePosition(start) * int(seg.frameWidth)
+	endIndex := seg.parsePosition(end) * int(seg.frameWidth)
 
-	silentRanges := DetectSilence(seg, minSilenceLen, silenceThresh, seekStep)
+	if endIndex > len(seg.data) {
+		endIndex = len(seg.data)
+	}
+
+	if startIndex >= endIndex {
+		return 0
+	}
+
+	// 直接在数据切片上计算RMS
+	dataSlice := seg.data[startIndex:endIndex]
+	rms, err := audioop.RMS(dataSlice, int(seg.sampleWidth))
+	if err != nil {
+		return 0
+	}
+
+	return float64(rms)
+}
+
+// DetectNonsilentConcurrent 是DetectNonsilent的并发优化版本
+func DetectNonsilentConcurrent(seg *AudioSegment, minSilenceLen int64, silenceThresh Volume, seekStep int) [][]int64 {
+	silentRanges := DetectSilenceConcurrent(seg, minSilenceLen, silenceThresh, seekStep)
 
 	lenSeg := seg.Duration()
 	var nonsilentRanges [][]int64
@@ -149,7 +199,6 @@ func DetectNonsilent(seg *AudioSegment, minSilenceLen int64, silenceThresh Volum
 	for i := range silentRanges {
 		nonsilentRanges = append(nonsilentRanges, []int64{prevEndI, silentRanges[i][0]})
 		prevEndI = silentRanges[i][1]
-
 		endI = prevEndI
 	}
 
@@ -157,30 +206,25 @@ func DetectNonsilent(seg *AudioSegment, minSilenceLen int64, silenceThresh Volum
 		nonsilentRanges = append(nonsilentRanges, []int64{prevEndI, lenSeg})
 	}
 
-	if cmp.Equal(nonsilentRanges[0], []time.Duration{0, 0}) {
-		nonsilentRanges = nonsilentRanges[1:]
-	}
-
 	return nonsilentRanges
 }
 
-// SplitOnSilence ...
-func SplitOnSilence(seg *AudioSegment, minSilenceLen int64, silenceThresh Volume, keepSilence int, seekStep int) ([]*AudioSegment, [][]float32, error) {
+// SplitOnSilenceConcurrent 使用并发优化的静音检测进行音频分割
+func SplitOnSilenceConcurrent(seg *AudioSegment, minSilenceLen int64, silenceThresh Volume, keepSilence int, seekStep int) ([]*AudioSegment, [][]float32, error) {
 
 	chunks := []*AudioSegment{}
 	var timings [][]float32
 
 	err := checkEmptyAudio(seg)
-
 	if err != nil {
 		return chunks, timings, err
 	}
 
 	normAudio, _ := seg.derive(seg.RawData())
-
 	normAudio = matchTargetAmp(seg, -20.0)
 
-	notSilenceRanges := DetectNonsilent(normAudio, minSilenceLen, silenceThresh, seekStep)
+	// 使用并发版本进行静音检测
+	notSilenceRanges := DetectNonsilentConcurrent(normAudio, minSilenceLen, silenceThresh, seekStep)
 
 	startMin := int64(0)
 
@@ -188,8 +232,8 @@ func SplitOnSilence(seg *AudioSegment, minSilenceLen int64, silenceThresh Volume
 		chunks = append(chunks, seg)
 		timings = append(timings, []float32{0.0, float32(seg.Len())})
 		return chunks, timings, nil
-
 	}
+
 	for i := 0; i < len(notSilenceRanges)-1; i++ {
 		endMax := notSilenceRanges[i][1] + (notSilenceRanges[i+1][0]-notSilenceRanges[i][1]+1)/2
 		startI := max(int(startMin), int(notSilenceRanges[i][0])-keepSilence)
@@ -199,7 +243,6 @@ func SplitOnSilence(seg *AudioSegment, minSilenceLen int64, silenceThresh Volume
 		if temp1 != nil {
 			chunks = append(chunks, temp1)
 			timings = append(timings, []float32{float32(startI) / 1000, float32(endI) / 1000.0})
-
 		}
 
 		startMin = notSilenceRanges[i][1]
@@ -211,30 +254,16 @@ func SplitOnSilence(seg *AudioSegment, minSilenceLen int64, silenceThresh Volume
 	if temp2 != nil {
 		chunks = append(chunks, temp2)
 		timings = append(timings, []float32{float32(startI) / 1000, float32(endI) / 1000.0})
-
 	}
+
 	return chunks, timings, nil
-}
-
-func detectLeadingSilence(sound *AudioSegment, silenceThreshold Volume, chunkSize int) int64 {
-	trimMS := int64(0)
-	for trimMS < sound.Duration() {
-		temp1, _ := sound.Slice(trimMS, trimMS+int64(chunkSize))
-		if temp1.DBFS() < silenceThreshold {
-			trimMS += int64(chunkSize)
-		} else {
-			break
-		}
-	}
-
-	return trimMS
 }
 
 // SplitAudio 将音频文件按照指定的目标长度在静音处切分成多个片段
 // audioFile: 音频文件路径
 // targetLen: 目标长度(秒)，默认30分钟
 // win: 检测窗口大小(秒)，默认60秒
-func SplitAudio(audioFile string, targetLen float64, win float64) ([][]float64, error) {
+func SplitAudioConcurrent(audioFile string, targetLen float64, win float64) ([][]float64, error) {
 	if targetLen == 0 {
 		targetLen = 30 * 60 // 默认30分钟
 	}
@@ -281,7 +310,7 @@ func SplitAudio(audioFile string, targetLen float64, win float64) ([][]float64, 
 		}
 
 		// 检测静音区域
-		silenceRegions := DetectSilence(windowAudio, int64(safeMargin*1000), Volume(-30), 1)
+		silenceRegions := DetectSilenceConcurrent(windowAudio, int64(safeMargin*1000), Volume(-30), 1)
 
 		// 将毫秒单位的静音区域转换为秒，并调整偏移
 		var validRegions [][]float64
