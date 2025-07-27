@@ -2,6 +2,7 @@ package godub
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
@@ -228,4 +229,87 @@ func detectLeadingSilence(sound *AudioSegment, silenceThreshold Volume, chunkSiz
 	}
 
 	return trimMS
+}
+
+// SplitAudio 将音频文件按照指定的目标长度在静音处切分成多个片段
+// audioFile: 音频文件路径
+// targetLen: 目标长度(秒)，默认30分钟
+// win: 检测窗口大小(秒)，默认60秒
+func SplitAudio(audioFile string, targetLen float64, win float64) ([][]float64, error) {
+	if targetLen == 0 {
+		targetLen = 30 * 60 // 默认30分钟
+	}
+	if win == 0 {
+		win = 60 // 默认60秒
+	}
+
+	// 打开音频文件
+	file, err := os.Open(audioFile)
+	if err != nil {
+		return nil, fmt.Errorf("error opening file: %v", err)
+	}
+	defer file.Close()
+
+	// 加载音频
+	audio, err := NewLoader().Load(file)
+	if err != nil {
+		return nil, fmt.Errorf("error loading audio: %v", err)
+	}
+
+	duration := float64(audio.Duration() / 1000) // 转换为秒
+	if duration <= targetLen+win {
+		return [][]float64{{0, duration}}, nil
+	}
+
+	segments := make([][]float64, 0)
+	pos := 0.0
+	safeMargin := 0.5 // 静默点前后安全边界，单位秒
+
+	for pos < duration {
+		if duration-pos <= targetLen {
+			segments = append(segments, []float64{pos, duration})
+			break
+		}
+
+		threshold := pos + targetLen
+		ws := int64((threshold - win) * 1000) // 窗口开始位置，单位毫秒
+		we := int64((threshold + win) * 1000) // 窗口结束位置，单位毫秒
+
+		// 切片获取检测区间的音频
+		windowAudio, err := audio.Slice(ws, we)
+		if err != nil {
+			return nil, fmt.Errorf("error slicing audio: %v", err)
+		}
+
+		// 检测静音区域
+		silenceRegions := DetectSilence(windowAudio, int64(safeMargin*1000), Volume(-30), 1)
+
+		// 将毫秒单位的静音区域转换为秒，并调整偏移
+		var validRegions [][]float64
+		for _, region := range silenceRegions {
+			start := float64(region[0])/1000 + (threshold - win)
+			end := float64(region[1])/1000 + (threshold - win)
+
+			// 筛选长度足够且位置适合的静默区域
+			if (end-start) >= (safeMargin*2) &&
+				threshold <= start+safeMargin &&
+				start+safeMargin <= threshold+win {
+				validRegions = append(validRegions, []float64{start, end})
+			}
+		}
+
+		splitAt := threshold
+		if len(validRegions) > 0 {
+			splitAt = validRegions[0][0] + safeMargin // 在静默区域起始点后0.5秒处切分
+		} else {
+			fmt.Printf("No valid silence regions found for %s at %.1fs, using threshold\n",
+				audioFile, threshold)
+		}
+
+		segments = append(segments, []float64{pos, splitAt})
+		pos = splitAt
+	}
+
+	fmt.Printf("Audio split completed %d segments\n", len(segments))
+	return segments, nil
 }
