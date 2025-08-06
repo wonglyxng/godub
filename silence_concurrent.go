@@ -2,7 +2,6 @@ package godub
 
 import (
 	"fmt"
-	"os"
 	"runtime"
 	"sync"
 
@@ -260,10 +259,10 @@ func SplitOnSilenceConcurrent(seg *AudioSegment, minSilenceLen int64, silenceThr
 }
 
 // SplitAudio 将音频文件按照指定的目标长度在静音处切分成多个片段
-// audioFile: 音频文件路径
+// audioFile: 音频文件path|io.Reader|[]byte
 // targetLen: 目标长度(秒)，默认30分钟
 // win: 检测窗口大小(秒)，默认60秒
-func SplitAudioConcurrent(audioFile string, targetLen float64, win float64) ([][]float64, error) {
+func SplitAudioConcurrent(audioFile interface{}, targetLen float64, win float64) ([][]float64, error) {
 	if targetLen == 0 {
 		targetLen = 30 * 60 // 默认30分钟
 	}
@@ -271,15 +270,8 @@ func SplitAudioConcurrent(audioFile string, targetLen float64, win float64) ([][
 		win = 60 // 默认60秒
 	}
 
-	// 打开音频文件
-	file, err := os.Open(audioFile)
-	if err != nil {
-		return nil, fmt.Errorf("error opening file: %v", err)
-	}
-	defer file.Close()
-
 	// 加载音频
-	audio, err := NewLoader().Load(file)
+	audio, err := NewLoader().Load(audioFile)
 	if err != nil {
 		return nil, fmt.Errorf("error loading audio: %v", err)
 	}
