@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"io/ioutil"
 
 	"bytes"
 )
@@ -24,7 +23,7 @@ type Decoder struct {
 }
 
 func NewDecoder(r io.Reader) (*Decoder, error) {
-	buf, err := ioutil.ReadAll(r)
+	buf, err := io.ReadAll(r)
 	if err != nil {
 		return nil, err
 	}

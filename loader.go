@@ -44,6 +44,8 @@ func (l *Loader) Load(src interface{}) (*AudioSegment, error) {
 			return nil, err
 		}
 		buf = result
+	case []byte:
+		buf = r
 	default:
 		return nil, fmt.Errorf("expected `io.Reader` or file path to original audio")
 	}
