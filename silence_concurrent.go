@@ -259,21 +259,15 @@ func SplitOnSilenceConcurrent(seg *AudioSegment, minSilenceLen int64, silenceThr
 }
 
 // SplitAudio 将音频文件按照指定的目标长度在静音处切分成多个片段
-// audioFile: 音频文件path|io.Reader|[]byte
+// audio: 音频文件
 // targetLen: 目标长度(秒)，默认30分钟
 // win: 检测窗口大小(秒)，默认60秒
-func SplitAudioConcurrent(audioFile interface{}, targetLen float64, win float64) ([][]float64, error) {
+func SplitAudioConcurrent(audio *AudioSegment, targetLen float64, win float64) ([][]float64, error) {
 	if targetLen == 0 {
 		targetLen = 30 * 60 // 默认30分钟
 	}
 	if win == 0 {
 		win = 60 // 默认60秒
-	}
-
-	// 加载音频
-	audio, err := NewLoader().Load(audioFile)
-	if err != nil {
-		return nil, fmt.Errorf("error loading audio: %v", err)
 	}
 
 	duration := float64(audio.Duration() / 1000) // 转换为秒
@@ -322,8 +316,7 @@ func SplitAudioConcurrent(audioFile interface{}, targetLen float64, win float64)
 		if len(validRegions) > 0 {
 			splitAt = validRegions[0][0] + safeMargin // 在静默区域起始点后0.5秒处切分
 		} else {
-			fmt.Printf("No valid silence regions found for %s at %.1fs, using threshold\n",
-				audioFile, threshold)
+			fmt.Printf("No valid silence regions found for audio file at %.1fs, using threshold\n", threshold)
 		}
 
 		segments = append(segments, []float64{pos, splitAt})
