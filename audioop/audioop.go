@@ -642,6 +642,7 @@ func Ratecv(cp []byte, size, nChannels, inRate, outRate, weightA, weightB int) (
 	prevI := make([]int, nChannels)
 	curI := make([]int, nChannels)
 
+	// Phase accumulator: negative means we need to consume input before producing output.
 	d = -outRate
 
 	frameCount := len(cp) / bytesPerFrame
@@ -656,6 +657,7 @@ func Ratecv(cp []byte, size, nChannels, inRate, outRate, weightA, weightB int) (
 		return nil, nil, err
 	}
 
+	// Iterate decoded samples in channel order.
 	samplesIter := NewInt32Interator(samples)
 
 	outI := 0
@@ -663,21 +665,24 @@ func Ratecv(cp []byte, size, nChannels, inRate, outRate, weightA, weightB int) (
 		for d < 0 {
 			if frameCount == 0 {
 				state := NewState(d, prevI, curI)
-				trimIndex := (outI * bytesPerFrame) - len(buf)
+				// Trim to the number of output samples we actually wrote.
+				trimIndex := outI * size
 				return buf[:trimIndex], state, nil
 			}
 
+			// Consume one input frame and update per-channel sample history.
 			for i := 0; i < nChannels; i++ {
 				prevI[i] = curI[i]
 				curI[i] = int(samplesIter.Next())
 				curI[i] = (weightA*curI[i] + weightB*prevI[i]) / (weightA + weightB)
 			}
 
-			frameCount += 1
+			frameCount -= 1
 			d += outRate
 		}
 
 		for d >= 0 {
+			// Produce one output frame via linear interpolation per channel.
 			for i := 0; i < nChannels; i++ {
 				curO := (prevI[i]*d + curI[i]*(outRate-d)) / outRate
 				err := putSample(buf, size, outI, overflow(int32(curO), size))
@@ -685,8 +690,8 @@ func Ratecv(cp []byte, size, nChannels, inRate, outRate, weightA, weightB int) (
 					return nil, nil, err
 				}
 				outI += 1
-				d -= inRate
 			}
+			d -= inRate
 		}
 	}
 
