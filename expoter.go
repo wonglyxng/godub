@@ -68,6 +68,11 @@ func (e *Exporter) WithSampleRate(rate int) *Exporter {
 	return e
 }
 
+func (e *Exporter) WithChannels(channels int) *Exporter {
+	e.converter.WithChannels(channels)
+	return e
+}
+
 func (e *Exporter) WithTags(tags map[string]string) *Exporter {
 	e.converter.WithTags(tags)
 	return e

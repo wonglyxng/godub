@@ -3,3 +3,4 @@ run_*
 build
 .DS_Store
 _examples/data
+.idea
